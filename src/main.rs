@@ -3,18 +3,14 @@ use std::io;
 use axum::{
     Json, Router,
     http::StatusCode,
-    response::Html,
-    routing::{get, post},
+    response::{IntoResponse, Response},
+    routing::get,
 };
+use serde::Serialize;
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    let app = Router::new()
-        .route("/plain", get(plain))
-        .route("/no-content", get(no_content))
-        .route("/json", get(json))
-        .route("/page", get(page))
-        .route("/create", post(created));
+    let app = Router::new().route("/users", get(list_users));
     let endpoint = "0.0.0.0:8000";
     let listener = tokio::net::TcpListener::bind(endpoint).await?;
     println!("Listening on {endpoint}...");
@@ -22,27 +18,37 @@ async fn main() -> io::Result<()> {
     axum::serve(listener, app).await
 }
 
-/// Returns plain text.
-async fn plain() -> &'static str {
-    "Hello"
+#[derive(Serialize)]
+struct User {
+    id: u64,
+    name: String,
 }
 
-/// Returns Status code only.
-async fn no_content() -> StatusCode {
-    StatusCode::NO_CONTENT
+enum ApiResponse {
+    Ok,
+    Created,
+    JsonData(Vec<User>),
 }
 
-/// Returns JSON.
-async fn json() -> Json<serde_json::Value> {
-    Json(serde_json::json!({"message": "Hello"}))
+impl IntoResponse for ApiResponse {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Ok => StatusCode::OK.into_response(),
+            Self::Created => StatusCode::CREATED.into_response(),
+            Self::JsonData(data) => (StatusCode::OK, Json(data)).into_response(),
+        }
+    }
 }
 
-/// Returns HTML.
-async fn page() -> Html<&'static str> {
-    Html("<h1>Hello</h1>")
-}
-
-/// Returns Tuple: (StatusCode, Body)
-async fn created() -> (StatusCode, Json<serde_json::Value>) {
-    (StatusCode::CREATED, Json(serde_json::json!({"id": 1})))
+async fn list_users() -> ApiResponse {
+    ApiResponse::JsonData(vec![
+        User {
+            id: 1,
+            name: "Alice".to_string(),
+        },
+        User {
+            id: 2,
+            name: "Bob".to_string(),
+        },
+    ])
 }
