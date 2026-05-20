@@ -1,23 +1,40 @@
-use std::{
-    io,
-    sync::{Arc, Mutex},
+use std::io;
+
+use axum::{
+    Router,
+    extract::{FromRef, State},
+    routing::get,
 };
 
-use axum::{Router, extract::State, routing::post};
+#[derive(Clone)]
+struct ApiState {
+    app_name: String,
+}
+
+#[derive(Clone)]
+struct AdminState {
+    config: String,
+}
 
 #[derive(Clone)]
 struct AppState {
-    count: Arc<Mutex<i32>>,
+    api_state: ApiState,
+    admin_state: AdminState,
 }
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
     let app_state = AppState {
-        count: Arc::new(Mutex::new(1)),
+        api_state: ApiState {
+            app_name: "Awsome Axum".to_string(),
+        },
+        admin_state: AdminState {
+            config: "Secret Config".to_string(),
+        },
     };
     let app = Router::new()
-        .route("/increment", post(increment))
-        .route("/decrement", post(decrement))
+        .route("/public", get(public_endpoint))
+        .route("/admin", get(admin_endpoint))
         .with_state(app_state);
     let endpoint = "0.0.0.0:8000";
     let listener = tokio::net::TcpListener::bind(endpoint).await?;
@@ -26,12 +43,22 @@ async fn main() -> io::Result<()> {
     axum::serve(listener, app).await
 }
 
-async fn increment(State(state): State<AppState>) -> String {
-    *state.count.lock().unwrap() += 1;
-    format!("updated count to {}", state.count.lock().unwrap())
+async fn public_endpoint(State(api): State<ApiState>) -> String {
+    format!("App Name: {}", api.app_name)
 }
 
-async fn decrement(State(state): State<AppState>) -> String {
-    *state.count.lock().unwrap() -= 1;
-    format!("updated count to {}", state.count.lock().unwrap())
+async fn admin_endpoint(State(admin): State<AdminState>) -> String {
+    format!("App Config: {}", admin.config)
+}
+
+impl FromRef<AppState> for ApiState {
+    fn from_ref(app: &AppState) -> Self {
+        app.api_state.clone()
+    }
+}
+
+impl FromRef<AppState> for AdminState {
+    fn from_ref(app: &AppState) -> Self {
+        app.admin_state.clone()
+    }
 }
