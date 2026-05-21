@@ -1,8 +1,9 @@
 #![allow(unused)]
-use std::{io, sync::Arc};
+use std::{io, sync::Arc, time::Duration};
 
 use axum::{
-    Json, Router,
+    BoxError, Json, Router,
+    error_handling::HandleErrorLayer,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
@@ -10,6 +11,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{Sqlite, SqlitePool, migrate::MigrateDatabase, prelude::FromRow};
+use tower::{ServiceBuilder, buffer::BufferLayer, limit::RateLimitLayer};
+use tower_http::{cors::CorsLayer, limit::RequestBodyLimitLayer, timeout::TimeoutLayer};
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -35,6 +38,24 @@ async fn main() -> io::Result<()> {
         .route("/fail", get(not_works))
         .route("/user", post(create_user))
         .route("/user/{id}", get(get_user))
+        // https://github.com/tokio-rs/axum/discussions/987#discussioncomment-2678595
+        .layer(CorsLayer::permissive())
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            Duration::from_secs(10),
+        ))
+        .layer(RequestBodyLimitLayer::new(1024 * 1024))
+        .layer(
+            ServiceBuilder::new()
+                .layer(HandleErrorLayer::new(|err: BoxError| async move {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Unhandled error: {}", err),
+                    )
+                }))
+                .layer(BufferLayer::new(1024))
+                .layer(RateLimitLayer::new(100, Duration::from_secs(60))),
+        )
         .with_state(app_state);
     let endpoint = "0.0.0.0:8000";
     let listener = tokio::net::TcpListener::bind(endpoint).await?;
