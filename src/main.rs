@@ -1,21 +1,25 @@
 #![allow(unused)]
-use std::{io, sync::Arc, time::Duration};
+use std::{
+    io,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use axum::{
     BoxError, Json, Router,
     error_handling::HandleErrorLayer,
-    extract::{Path, State},
+    extract::{Path, Request, State},
     http::StatusCode,
+    middleware::Next,
     response::IntoResponse,
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{Sqlite, SqlitePool, migrate::MigrateDatabase, prelude::FromRow};
-use tower::{ServiceBuilder, buffer::BufferLayer, limit::RateLimitLayer};
-use tower_http::{cors::CorsLayer, limit::RequestBodyLimitLayer, timeout::TimeoutLayer};
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
+    tracing_subscriber::fmt::init();
     // run `export DATABASE_URL=sqlite:sqlite.db` and `sqlx migrate run` before starting the server.
 
     let db_url = "sqlite:sqlite.db";
@@ -38,24 +42,7 @@ async fn main() -> io::Result<()> {
         .route("/fail", get(not_works))
         .route("/user", post(create_user))
         .route("/user/{id}", get(get_user))
-        // https://github.com/tokio-rs/axum/discussions/987#discussioncomment-2678595
-        .layer(CorsLayer::permissive())
-        .layer(TimeoutLayer::with_status_code(
-            StatusCode::REQUEST_TIMEOUT,
-            Duration::from_secs(10),
-        ))
-        .layer(RequestBodyLimitLayer::new(1024 * 1024))
-        .layer(
-            ServiceBuilder::new()
-                .layer(HandleErrorLayer::new(|err: BoxError| async move {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("Unhandled error: {}", err),
-                    )
-                }))
-                .layer(BufferLayer::new(1024))
-                .layer(RateLimitLayer::new(100, Duration::from_secs(60))),
-        )
+        .layer(axum::middleware::from_fn(timing_middleware))
         .with_state(app_state);
     let endpoint = "0.0.0.0:8000";
     let listener = tokio::net::TcpListener::bind(endpoint).await?;
@@ -145,4 +132,18 @@ async fn create_user(
         .await?;
 
     Ok((StatusCode::CREATED, "New user created."))
+}
+
+async fn timing_middleware(req: Request, next: Next) -> impl IntoResponse {
+    let start = Instant::now();
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+
+    // some time-consuming respnose...
+    let response = next.run(req).await;
+
+    let duration = start.elapsed();
+    tracing::info!("{method} {uri} -> {} in {duration:?}", response.status());
+
+    response
 }
