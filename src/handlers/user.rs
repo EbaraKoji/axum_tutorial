@@ -29,13 +29,17 @@ pub async fn login_user(
     State(state): State<Arc<AppState>>,
     Json(login_user): Json<LoginUser>,
 ) -> Result<impl IntoResponse, AppError> {
-    // Vaidate password: use hashed password in production env!
-    if login_user.password != "testuserpass" {
-        return Err(AppError::Unauthorized);
-    }
     let user = sqlx::query_as!(User, "SELECT * FROM users WHERE id= $1", login_user.id)
         .fetch_one(&state.db_pool)
         .await?;
+    // Validate login password
+    if !user.verify_password(&login_user.password).map_err(|e| {
+        tracing::error!("Failed to verify: {e}");
+        AppError::Unauthorized
+    })? {
+        return Err(AppError::Unauthorized);
+    }
+
     let header = Header::new(Algorithm::HS256);
     // Use env var for jwt secret key in production env!
     let encoding_key = EncodingKey::from_secret("supersecret".as_ref());
@@ -55,24 +59,30 @@ pub async fn login_user(
 pub struct CreateUser {
     username: String,
     email: String,
+    password: String,
 }
 
 /// example: curl -X POST http://localhost:8000/user -H "Content-type:application/json" \
-/// -d '{"username": "Ebara", "email": "ebara@example.com"}'
+/// -d '{"username": "Ebara", "email": "ebara@example.com", "password": "testuserpass"}'
 pub async fn create_user(
     State(state): State<Arc<AppState>>,
     Json(user): Json<CreateUser>,
 ) -> Result<impl IntoResponse, AppError> {
-    sqlx::query("INSERT INTO users (username, email) VALUES (?, ?)")
+    let password_hash = bcrypt::hash(&user.password, 5).map_err(|e| {
+        tracing::error!("Bcrypt hashing failed: {e}");
+        AppError::Internal("Failed to create user".to_string())
+    })?;
+    sqlx::query("INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)")
         .bind(user.username)
         .bind(user.email)
+        .bind(password_hash)
         .execute(&state.db_pool)
         .await?;
 
     Ok((StatusCode::CREATED, "New user created."))
 }
 
-/// example: curl http://localhost:8000/user/1'
+/// example: curl http://localhost:8000/user/1
 pub async fn get_user(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
@@ -83,6 +93,8 @@ pub async fn get_user(
     Ok(Json(user))
 }
 
+/// First get auth token with login function.
+/// example: `curl http://localhost:8000/profile -H "Authorization: Bearer eyJ0..."`
 pub async fn profile(
     State(state): State<Arc<AppState>>,
     auth_user: AuthUser,
