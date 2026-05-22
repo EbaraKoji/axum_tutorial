@@ -4,7 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0.102"
+async-trait = "0.1.89"
 axum = { version = "0.8" }
+axum_session = "0.20.1"
+axum_session_auth = "0.20.0"
+axum_session_sqlx = { version = "0.9.0", features = ["sqlite", "tls-rustls"] }
 bcrypt = "0.19.1"
 chrono = "0.4.44"
 jsonwebtoken = { version = "10.4.0", features = ["rust_crypto"] }
